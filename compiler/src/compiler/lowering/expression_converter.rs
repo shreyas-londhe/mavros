@@ -934,9 +934,13 @@ impl<'a> ExpressionConverter<'a> {
 
                 match typ {
                     AstType::Field => {
-                        // Convert SignedField to ark_bn254::Fr directly (both backed by same type)
+                        // Field-agnostically convert the Noir field element to Mavros's bn254
+                        // field. Under a Goldilocks Noir build the source field differs from
+                        // Mavros's constraint field, so we bridge via canonical bytes rather
+                        // than assuming both are ark_bn254::Fr.
                         let field_element = signed_field.to_field_element();
-                        let field_val = field_element.into_repr();
+                        let field_val =
+                            crate::compiler::noir_field_to_bn254(field_element.into_repr());
                         Some(b.emit_const(Constant::Field(field_val)))
                     }
                     AstType::Integer(signedness, bit_size) => {

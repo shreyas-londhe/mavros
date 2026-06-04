@@ -25,7 +25,7 @@ bimap = { version = "0.6" }
 bincode = { version = "1.3" }
 cargo_metadata = { version = "0.23.1" }
 clap = { version = "4.5.17", features = ["unstable-v5", "derive"] }
-inkwell = { version = "0.9.0", features = ["llvm22-1"] }
+inkwell = { version = "0.9.0", features = ["llvm22-1"], optional = true }
 itertools = { version = "0.14.0" }
 num-bigint = { version = "0.4" }
 num-traits = { version = "0.2" }
@@ -48,10 +48,23 @@ walkdir.workspace = true
 [[bin]]
 name = "mavros"
 path = "src/bin/main.rs"
+required-features = ["llvm"]
 
 [[bin]]
 name = "test-runner"
 path = "src/bin/test_runner.rs"
+required-features = ["llvm"]
+
+[features]
+# LLVM/inkwell is only needed for witgen/AD codegen (HLSSA -> LLVM -> WASM). The
+# Noir -> mono AST -> R1CS path (`api::compile_to_r1cs`) is LLVM-free. Gating LLVM behind
+# a default feature lets that path build without an LLVM toolchain via
+# `--no-default-features` (e.g. to validate R1CS lowering of a Goldilocks program).
+default = ["llvm"]
+llvm = ["dep:inkwell"]
+# Build the patched local Noir with its Goldilocks field, to validate that Mavros lowers a
+# Goldilocks-sourced monomorphized AST. Enabling it flips acir_field's field globally.
+goldilocks = ["noirc_frontend/goldilocks", "noirc_driver/goldilocks"]
 
 [lints]
 workspace = true

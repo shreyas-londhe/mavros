@@ -80,3 +80,15 @@ to_string_in_format_args = "deny"
 unconditional_recursion = "deny"
 unnecessary_cast = "deny"
 useless_conversion = "deny"
+
+# Goldilocks research: redirect the pinned noir-lang/noir git deps to a local editable
+# checkout (cloned at the exact rev Mavros pins: 74d6be6 = v1.0.0-beta.19) so we can make
+# the frontend field-agnostic. Revert by deleting this block to restore the upstream git source.
+[patch."https://github.com/noir-lang/noir.git"]
+fm = { path = "../noir/compiler/fm" }
+nargo = { path = "../noir/tooling/nargo" }
+nargo_toml = { path = "../noir/tooling/nargo_toml" }
+noirc_abi = { path = "../noir/tooling/noirc_abi" }
+noirc_driver = { path = "../noir/compiler/noirc_driver" }
+noirc_errors = { path = "../noir/compiler/noirc_errors" }
+noirc_frontend = { path = "../noir/compiler/noirc_frontend" }

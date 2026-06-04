@@ -128,3 +128,47 @@ pub fn check_ad(r1cs: &R1CS, coeffs: &[Field], a: &[Field], b: &[Field], c: &[Fi
 pub fn debug_output_dir(driver: &Driver) -> PathBuf {
     driver.get_debug_output_dir()
 }
+
+#[cfg(test)]
+mod tier2_tests {
+    use super::*;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../noir_tests").join(name)
+    }
+
+    /// Mavros lowers a program whose integer constants exceed the Goldilocks modulus to a
+    /// valid R1CS. The mono AST carries those constants exactly (field-agnostic `SignedField`)
+    /// and Mavros lowers them natively (`to_u128` -> `Constant::U`), independent of the source
+    /// field.
+    ///
+    /// Under bn254 this validates the full Noir -> mono AST -> R1CS lowering. Under
+    /// `--features goldilocks` the crate still *builds* (proving the intake is field-agnostic
+    /// — see `noir_field_to_bn254`), but end-to-end compilation is blocked by the auto-injected
+    /// **bn254 stdlib**, which is not Goldilocks-compatible (254-bit `Field` literals, `Field`
+    /// constants >= p, bn254 hashing). That stdlib port is Phase 2 / Cluster B, out of scope
+    /// here; we assert the failure originates in the stdlib, not in Mavros's intake.
+    #[test]
+    fn compiles_beyond_field_u64_to_r1cs() {
+        let result = compile_to_r1cs(fixture("goldilocks_u64"), false);
+
+        #[cfg(not(feature = "goldilocks"))]
+        {
+            let (_driver, r1cs) = result.unwrap();
+            assert!(!r1cs.constraints.is_empty(), "expected a non-empty R1CS");
+            println!("goldilocks_u64 -> {} constraints", r1cs.constraints.len());
+        }
+        #[cfg(feature = "goldilocks")]
+        {
+            let err = match result {
+                Ok(_) => panic!("expected the bn254 stdlib to block goldilocks compile"),
+                Err(e) => e,
+            };
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("cannot fit into `Field`") || msg.contains("Integer literal is too large"),
+                "expected a stdlib field-range/literal error, got: {msg}"
+            );
+        }
+    }
+}

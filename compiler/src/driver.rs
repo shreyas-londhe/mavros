@@ -455,6 +455,7 @@ impl Driver {
         self.base_witgen_ssa = Some(ssa);
     }
 
+    #[cfg(feature = "llvm")]
     #[tracing::instrument(skip_all)]
     pub fn compile_llvm_targets(
         &mut self,
@@ -522,6 +523,7 @@ impl Driver {
         Ok(llvm_ir)
     }
 
+    #[cfg(feature = "llvm")]
     #[tracing::instrument(skip_all)]
     pub fn compile_ad_llvm_targets(
         &mut self,
