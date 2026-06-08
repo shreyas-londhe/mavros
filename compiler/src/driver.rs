@@ -137,6 +137,12 @@ impl Driver {
 
         let mut prepared_replacements = Vec::new();
         for replacement in REPLACEMENT_CRATES {
+            // Skip replacements specific to a different field than the build target. The bn254
+            // Poseidon2 constants neither type-check nor compute under Goldilocks; a program
+            // that hashes under Goldilocks needs a Goldilocks Poseidon, which is a later tier.
+            if !replacement.matches_build_field() {
+                continue;
+            }
             let functions = prepare_replacement_crate(&mut context, crate_id, replacement)?;
             prepared_replacements.push((replacement, functions));
         }
@@ -193,6 +199,65 @@ impl Driver {
                 .to_string(&DefaultSSAAnnotator),
         )
         .unwrap();
+
+        Ok(())
+    }
+
+    /// Run only the Noir frontend (elaborate, then monomorphize `main`) and retain the
+    /// monomorphized AST + ABI for AST-level validation — the input to the AST interpreter
+    /// and the cross-field differential. It does **not** build SSA/R1CS.
+    ///
+    /// Unlike [`Self::run_noir_compiler`], it tolerates elaboration errors confined to code
+    /// `main` does not reach. This is what lets a trivial integer program validate under
+    /// Goldilocks even though the auto-injected bn254 crypto stdlib (embedded curve, Poseidon
+    /// constants, `field/bn254.nr`) does not type-check on a small field: monomorphizing `main`
+    /// only walks main's reachable set, and `compile_main`/`process_queue` below still fail if
+    /// *that* set is invalid. Porting the crypto stdlib so the whole crate type-checks under
+    /// Goldilocks is a separate effort (Tier-2); this oracle does not need it.
+    ///
+    /// Replacement crates are intentionally not injected here: the basic-functionality corpus
+    /// does not call blackbox builtins, and the bn254 ones are absent under Goldilocks anyway.
+    #[tracing::instrument(skip_all)]
+    pub fn run_noir_frontend_for_validation(&mut self) -> Result<(), Error> {
+        let (mut context, crate_id) = nargo::prepare_package(
+            self.project.file_manager(),
+            self.project.parsed_files(),
+            self.project.get_only_crate(),
+        );
+
+        // Tolerate elaboration errors: they may be confined to unreached stdlib (e.g. the bn254
+        // crypto modules under Goldilocks). `compile_main` below rejects a broken *reachable* set.
+        let _ = noirc_driver::check_crate(
+            &mut context,
+            crate_id,
+            &noirc_driver::CompileOptions::default(),
+        );
+
+        let main = context.get_main_function(context.root_crate_id()).ok_or_else(|| {
+            Error::NoirCompilerError(vec![noirc_errors::reporter::CustomDiagnostic::from_message(
+                "expected a `main` function to validate",
+                fm::FileId::dummy(),
+            )])
+        })?;
+        let debug_type_tracker =
+            DebugTypeTracker::build_from_debug_instrumenter(&DebugInstrumenter::default());
+        let mut monomorphizer =
+            Monomorphizer::new(&mut context.def_interner, debug_type_tracker, false);
+        monomorphizer
+            .compile_main(main)
+            .map_err(|e| Error::NoirCompilerError(vec![e.into()]))?;
+        monomorphizer
+            .process_queue()
+            .map_err(|e| Error::NoirCompilerError(vec![e.into()]))?;
+        let program = monomorphizer.into_program();
+
+        self.abi = Some(noirc_driver::gen_abi(
+            &context,
+            &main,
+            program.return_visibility(),
+            BTreeMap::default(),
+        ));
+        self.monomorphized_program = Some(program);
 
         Ok(())
     }

@@ -23,6 +23,25 @@ pub struct ReplacementCrate {
     pub dep_name: &'static str,
     pub source: &'static str,
     pub replacements: &'static [ReplacementSpec],
+    /// The field this replacement's constants are specific to, if any. `None` means
+    /// field-agnostic (e.g. byte-oriented SHA-256). A field-specific replacement is only
+    /// injected when the build targets that field — its constants neither type-check nor
+    /// compute correctly under a different field. See [`ReplacementCrate::matches_build_field`].
+    pub field: Option<&'static str>,
+}
+
+impl ReplacementCrate {
+    /// Whether this replacement should be injected for the field the compiler was built for.
+    /// Field-agnostic replacements always apply; field-specific ones apply only on their field.
+    /// (Mavros selects the field at compile time via the `goldilocks` feature, mirroring how
+    /// `acvm::FieldElement` is chosen.)
+    pub fn matches_build_field(&self) -> bool {
+        match self.field {
+            None => true,
+            Some("bn254") => !cfg!(feature = "goldilocks"),
+            Some(_) => false,
+        }
+    }
 }
 
 impl ReplacementCrate {
@@ -55,6 +74,9 @@ pub const REPLACEMENT_CRATES: &[ReplacementCrate] = &[
                 ("t16", 16),
             ]),
         }],
+        // The Poseidon2 round constants are bn254-specific; a Goldilocks Poseidon is a
+        // separate (Tier-2) implementation that does not exist yet.
+        field: Some("bn254"),
     },
     ReplacementCrate {
         file_name: "sha256_compression.nr",
@@ -64,6 +86,8 @@ pub const REPLACEMENT_CRATES: &[ReplacementCrate] = &[
             lowlevel_name: "sha256_compression",
             kind: ReplacementKind::Single("sha256_compression"),
         }],
+        // SHA-256 operates on bytes, independent of the field.
+        field: None,
     },
     ReplacementCrate {
         file_name: "field_less_than.nr",
@@ -73,6 +97,8 @@ pub const REPLACEMENT_CRATES: &[ReplacementCrate] = &[
             lowlevel_name: "field_less_than",
             kind: ReplacementKind::Single("field_less_than"),
         }],
+        // Decomposition-based comparison with no field-specific constants.
+        field: None,
     },
 ];
 

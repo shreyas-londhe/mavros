@@ -111,6 +111,40 @@ fn interpreter_return_matches_recorded_expected() {
     );
 }
 
+/// Tier-1 Goldilocks validation: a `u64` program whose constant exceeds the Goldilocks modulus
+/// (`big = p + 1`) compiles to a monomorphized AST *under Goldilocks* via the reachability-only
+/// frontend (the bn254 crypto stdlib it never touches does not block it), and the interpreter
+/// computes the correct **native** `u64` result — proving the Goldilocks frontend did not corrupt
+/// the integer. The expected value is field-independent (bn254 carries the same `u64` natively),
+/// so this assertion is itself the cross-field equivalence claim for this program; the corpus-wide
+/// version is the `dump_corpus_outcomes` + `cross_field_diff` pair.
+#[cfg(feature = "goldilocks")]
+#[test]
+fn validates_goldilocks_mono_ast_u64() {
+    use super::IntValue;
+    use num_bigint::BigInt;
+
+    let project = Project::new(fixture("goldilocks_u64")).expect("project");
+    let mut driver = Driver::new(project, false);
+    driver
+        .run_noir_frontend_for_validation()
+        .expect("goldilocks frontend should produce a mono-AST for a stdlib-free u64 program");
+    let program = driver.monomorphized_program();
+
+    // main(x: u64) -> u64 = x * 2 + (p + 1). With x = 3: 6 + 18446744069414584322.
+    let x = Value::Int(IntValue { signed: false, bits: 64, value: BigInt::from(3u64) });
+    let result = interpret_with_inputs(program, vec![x]).expect("interpret");
+    let expected = Value::Int(IntValue {
+        signed: false,
+        bits: 64,
+        value: BigInt::from(18446744069414584328u64),
+    });
+    assert_eq!(
+        result, expected,
+        "Goldilocks mono-AST must carry p+1 exactly and compute the native u64 result"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Corpus survey (manual): run Noir's own `execution_success` programs through the
 // interpreter and bucket the outcomes, to map the coverage frontier. Run with:
@@ -230,8 +264,10 @@ fn run_outcome(program_dir: &Path) -> DiffOutcome {
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let project = Project::new(root.clone()).map_err(|e| format!("project: {e}"))?;
         let mut driver = Driver::new(project, false);
+        // Use the reachability-only frontend so the two field arms are extracted identically
+        // and the Goldilocks arm is not blocked by the unreached bn254 crypto stdlib (Tier-2).
         driver
-            .run_noir_compiler()
+            .run_noir_frontend_for_validation()
             .map_err(|e| format!("compile: {e}"))?;
         let program = driver.monomorphized_program();
         let inputs = match std::fs::read_to_string(root.join("Prover.toml")) {
