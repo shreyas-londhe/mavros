@@ -5,8 +5,8 @@ use crate::driver::Driver;
 use crate::project::Project;
 
 use super::{
-    InterpretError, Value, expected_return_from_prover_toml, inputs_from_prover_toml, interpret,
-    interpret_with_inputs,
+    DiffOutcome, DiffValue, InterpretError, Value, expected_return_from_prover_toml,
+    inputs_from_prover_toml, interpret, interpret_with_inputs, outcomes_equivalent,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -218,6 +218,158 @@ fn classify(program_dir: &Path) -> String {
             }
         }
     }
+}
+
+/// Run one program through compile + interpret and capture a serializable, field-independent
+/// outcome for the cross-field differential. Mirrors `classify` but returns structured data.
+fn run_outcome(program_dir: &Path) -> DiffOutcome {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("pkg");
+    copy_dir(program_dir, &root);
+
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let project = Project::new(root.clone()).map_err(|e| format!("project: {e}"))?;
+        let mut driver = Driver::new(project, false);
+        driver
+            .run_noir_compiler()
+            .map_err(|e| format!("compile: {e}"))?;
+        let program = driver.monomorphized_program();
+        let inputs = match std::fs::read_to_string(root.join("Prover.toml")) {
+            Ok(src) => inputs_from_prover_toml(program, driver.abi(), &src)
+                .map_err(|e| format!("inputs: {e}"))?,
+            Err(_) => Vec::new(),
+        };
+        interpret_with_inputs(program, inputs).map_err(|e| format!("interpret: {e}"))
+    }));
+
+    match result {
+        Ok(Ok(value)) => DiffOutcome::Returned(DiffValue::from_value(&value)),
+        Ok(Err(reason)) => DiffOutcome::Errored(reason),
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_string());
+            DiffOutcome::Errored(format!(
+                "panic: {}",
+                msg.lines().next().unwrap_or("").trim()
+            ))
+        }
+    }
+}
+
+fn corpus_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../noir/test_programs/execution_success")
+}
+
+/// The field this build targets, used to tag the dump file. The two fields are separate builds
+/// (the field is selected at compile time), so each writes its own file for the diff to consume.
+fn field_tag() -> &'static str {
+    if cfg!(feature = "goldilocks") {
+        "goldilocks"
+    } else {
+        "bn254"
+    }
+}
+
+fn dump_path(tag: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../target/cross_field_{tag}.json"))
+}
+
+/// Cross-field differential, step 1: dump this build's per-program outcomes to a field-tagged
+/// JSON file. Run once per field:
+///   cargo test ... --lib ast_interpreter::tests::dump_corpus_outcomes -- --ignored
+///   cargo test ... --features goldilocks --lib ast_interpreter::tests::dump_corpus_outcomes -- --ignored
+/// (The Goldilocks dump is mostly `Errored` until the stdlib port lands — CRY-9.)
+#[test]
+#[ignore = "cross-field differential: dump this field's interpreter outcomes"]
+fn dump_corpus_outcomes() {
+    let corpus = corpus_dir();
+    assert!(corpus.is_dir(), "corpus not found at {}", corpus.display());
+
+    let mut outcomes: Vec<(String, DiffOutcome)> = Vec::new();
+    for entry in std::fs::read_dir(&corpus).unwrap() {
+        let dir = entry.unwrap().path();
+        let manifest = dir.join("Nargo.toml");
+        if !dir.is_dir() || !manifest.exists() {
+            continue;
+        }
+        if std::fs::read_to_string(&manifest)
+            .map(|s| s.contains("[workspace]"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        outcomes.push((name, run_outcome(&dir)));
+    }
+
+    // Round-trip through JSON to validate serialization (plumbing check, no second field needed).
+    let json = serde_json::to_string_pretty(&outcomes).unwrap();
+    let restored: Vec<(String, DiffOutcome)> = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, outcomes, "dump must round-trip through JSON");
+
+    let path = dump_path(field_tag());
+    std::fs::write(&path, &json).unwrap();
+    let returned = outcomes
+        .iter()
+        .filter(|(_, o)| matches!(o, DiffOutcome::Returned(_)))
+        .count();
+    println!(
+        "wrote {} outcomes ({returned} returned a value) for field '{}' to {}",
+        outcomes.len(),
+        field_tag(),
+        path.display()
+    );
+}
+
+/// Cross-field differential, step 2: diff the two field dumps. Integer/struct values must match;
+/// `Field` values may differ. A divergence on an integer is the corruption the Goldilocks work
+/// risks. Requires both dumps to exist (run `dump_corpus_outcomes` under each field first).
+#[test]
+#[ignore = "cross-field differential: diff the bn254 and goldilocks dumps"]
+fn cross_field_diff() {
+    use std::collections::BTreeMap;
+
+    let load = |tag: &str| -> Option<BTreeMap<String, DiffOutcome>> {
+        let text = std::fs::read_to_string(dump_path(tag)).ok()?;
+        Some(
+            serde_json::from_str::<Vec<(String, DiffOutcome)>>(&text)
+                .unwrap()
+                .into_iter()
+                .collect(),
+        )
+    };
+
+    let (Some(bn254), Some(goldilocks)) = (load("bn254"), load("goldilocks")) else {
+        panic!(
+            "missing a dump; run dump_corpus_outcomes under each field first \
+             (the goldilocks dump needs the CRY-9 stdlib port to produce real values)"
+        );
+    };
+
+    let mut compared = 0;
+    let mut divergences: Vec<String> = Vec::new();
+    for (name, bn) in &bn254 {
+        let Some(gl) = goldilocks.get(name) else {
+            continue;
+        };
+        compared += 1;
+        if let Err(reason) = outcomes_equivalent(bn, gl) {
+            divergences.push(format!("{name}: {reason}"));
+        }
+    }
+
+    println!("compared {compared} programs present in both fields");
+    for d in &divergences {
+        println!("  DIVERGENCE: {d}");
+    }
+    assert!(
+        divergences.is_empty(),
+        "{} cross-field divergence(s) found",
+        divergences.len()
+    );
 }
 
 #[cfg(not(feature = "goldilocks"))]

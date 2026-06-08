@@ -14,6 +14,7 @@
 //! (for the integer-typed values that are field-independent), that is the differential signal
 //! that the Goldilocks changes did not corrupt the AST.
 
+mod diff;
 mod error;
 mod eval;
 mod input;
@@ -22,6 +23,7 @@ mod value;
 #[cfg(test)]
 mod tests;
 
+pub use diff::{DiffOutcome, DiffValue, outcomes_equivalent, values_equivalent};
 pub use error::InterpretError;
 pub use input::{expected_return_from_prover_toml, inputs_from_prover_toml};
 pub use value::{IntValue, Value};
