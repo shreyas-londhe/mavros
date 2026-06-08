@@ -85,6 +85,7 @@ useless_conversion = "deny"
 # checkout (cloned at the exact rev Mavros pins: 74d6be6 = v1.0.0-beta.19) so we can make
 # the frontend field-agnostic. Revert by deleting this block to restore the upstream git source.
 [patch."https://github.com/noir-lang/noir.git"]
+acvm = { path = "../noir/acvm-repo/acvm" }
 fm = { path = "../noir/compiler/fm" }
 nargo = { path = "../noir/tooling/nargo" }
 nargo_toml = { path = "../noir/tooling/nargo_toml" }

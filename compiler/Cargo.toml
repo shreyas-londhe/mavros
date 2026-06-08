@@ -10,6 +10,7 @@ mavros-vm.workspace = true
 mavros-wasm-layout.workspace = true
 
 # The Noir crates that the compiler depends on
+acvm = { git = "https://github.com/noir-lang/noir.git", tag = "v1.0.0-beta.19", package = "acvm" }
 fm = { git = "https://github.com/noir-lang/noir.git", tag = "v1.0.0-beta.19", package = "fm" }
 nargo = { git = "https://github.com/noir-lang/noir.git", tag = "v1.0.0-beta.19", package = "nargo" }
 nargo_toml = { git = "https://github.com/noir-lang/noir.git", tag = "v1.0.0-beta.19", package = "nargo_toml" }

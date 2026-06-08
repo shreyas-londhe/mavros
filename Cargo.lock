@@ -2193,6 +2193,7 @@ dependencies = [
 name = "mavros-compiler"
 version = "0.1.0"
 dependencies = [
+ "acvm",
  "anyhow",
  "ark-bn254",
  "ark-ff",
